@@ -81,8 +81,21 @@
     <button class="sec" id="copyOut">出力をコピー</button></div>
 
   <fieldset>
-    <legend>出力 (変更された語を強調表示)</legend>
+    <legend>出力</legend>
+    <div class="row">
+      <div><label for="diffMode">表示</label>
+        <select id="diffMode">
+          <option value="inline">変更前後を併記</option>
+          <option value="mark">変更後のみ (変更箇所を強調)</option>
+          <option value="bits">搬送ビットで色分け</option>
+          <option value="plain">変更なしの出力</option>
+        </select>
+      </div>
+      <div><label><input type="checkbox" id="diffOnly"> 変更のあった箇所だけ抜き出す</label></div>
+      <div id="diffLegend" class="legend"></div>
+    </div>
     <pre class="out" id="outHl"></pre>
+    <div id="diffStat" class="stat"></div>
     <textarea id="out" rows="6" spellcheck="false"></textarea>
   </fieldset>
   <div id="embedMsg"></div>
@@ -100,9 +113,39 @@
   </fieldset>
   <div id="exMsg"></div>
   <div class="stat" id="exStat"></div>
-  <div id="exBlocks"></div>
+
   <fieldset><legend>復元したペイロード</legend>
     <div class="stat" id="exPayload"></div>
+  </fieldset>
+
+  <fieldset id="exFrameBox" hidden>
+    <legend>ブロックの検出状況</legend>
+    <div id="exBlocks"></div>
+    <div id="exBlockTable"></div>
+  </fieldset>
+
+  <fieldset id="exMapBox" hidden>
+    <legend>本文中のどこに何が載っていたか</legend>
+    <div class="row">
+      <div><label for="exMapScope">表示範囲</label>
+        <select id="exMapScope">
+          <option value="primary">復号に使った 1 周期</option>
+          <option value="all">検出したすべての周期</option>
+        </select>
+      </div>
+      <div id="exLegend" class="legend"></div>
+    </div>
+    <pre class="out" id="exMap"></pre>
+    <small class="note">語の下線の色がフレーム上の役割を示す。マウスを重ねるとブロック番号・ビット位置・ビット値が出る。</small>
+  </fieldset>
+
+  <fieldset id="exBytesBox" hidden>
+    <legend>ペイロード各バイトの搬送位置</legend>
+    <div id="exBytes"></div>
+    <small class="note">
+      搬送ビットは鍵ストリームで XOR されているため、生ビットの並びと復調後のバイト値は一致しない。
+      「生ビット」が本文から読み取った値、「復調値」が XOR を解いた後の値。
+    </small>
   </fieldset>
 </section>
 

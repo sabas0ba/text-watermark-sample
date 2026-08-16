@@ -50,3 +50,40 @@ th { background:var(--panel); font-weight:600; }
 .blocks i.hit { background:var(--ok); border-color:var(--ok); color:#fff; }
 small.note { color:var(--muted); font-size:11.5px; display:block; margin-top:4px; }
 code { font-family:var(--mono); font-size:12px; background:var(--panel); border:1px solid var(--line); border-radius:3px; padding:0 4px; }
+
+/* --- 変更前後の差分表示 --- */
+del.wm { color:var(--ng); text-decoration:line-through; text-decoration-thickness:1px; opacity:.75; }
+ins.wm { color:var(--ok); text-decoration:none; background:var(--mark); border-radius:2px; padding:0 1px; }
+span.wm-same { border-bottom:1px dotted var(--line); }
+span.bit0, span.bit1 { border-radius:2px; padding:0 1px; }
+span.bit0 { background:color-mix(in srgb, var(--accent) 18%, transparent); }
+span.bit1 { background:color-mix(in srgb, var(--ok) 22%, transparent); }
+span.gap { color:var(--muted); }
+
+/* --- フレーム上の役割 --- */
+span.f-sync, span.f-idx, span.f-total, span.f-data, span.f-crc {
+  border-bottom:2px solid transparent; padding-bottom:1px;
+}
+span.f-sync  { border-bottom-color:#8957e5; }
+span.f-idx   { border-bottom-color:#1f6feb; }
+span.f-total { border-bottom-color:#0aa2c0; }
+span.f-data  { border-bottom-color:#1a7f37; background:var(--mark); }
+span.f-crc   { border-bottom-color:#b42318; }
+span.f-none  { color:var(--muted); }
+span.dim     { opacity:.45; }
+
+.legend { display:flex; flex-wrap:wrap; gap:4px 12px; font-size:11.5px; color:var(--muted); align-items:center; }
+.legend em { font-style:normal; display:inline-flex; align-items:center; gap:4px; }
+.legend em::before { content:''; width:14px; height:3px; border-radius:2px; background:currentColor; }
+.legend em.sync::before  { background:#8957e5; }
+.legend em.idx::before   { background:#1f6feb; }
+.legend em.total::before { background:#0aa2c0; }
+.legend em.data::before  { background:#1a7f37; }
+.legend em.crc::before   { background:#b42318; }
+.legend em.b0::before    { background:var(--accent); }
+.legend em.b1::before    { background:var(--ok); }
+.legend em.del::before   { background:var(--ng); }
+.legend em.ins::before   { background:var(--mark); }
+
+td.mono-wrap { font-family:var(--mono); word-break:break-all; max-width:420px; white-space:normal; }
+tr.miss td { color:var(--ng); }

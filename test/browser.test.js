@@ -167,6 +167,58 @@ test('GET パラメータ', { skip: chromium ? false : 'playwright が利用で�
     assert.strictEqual(await page.inputValue('#profile'), 'compact');
   });
 
+  await t.test('埋め込み結果を変更前後の差分として表示できる', async () => {
+    await page.goto(`${base}?text64=${b64url(TEXT)}&payload=ID:0042&run=embed`);
+    await page.waitForFunction(() => document.getElementById('out').value.length > 0);
+
+    // 既定は併記モード。変更された語は del + ins の対で出る。
+    const dels = await page.$$eval('#outHl del.wm', (e) => e.length);
+    const ins = await page.$$eval('#outHl ins.wm', (e) => e.length);
+    assert.ok(dels > 0, '変更前の語が表示されていない');
+    assert.strictEqual(dels, ins);
+
+    // 抜き出しモードでは、文脈の重複なく変更箇所だけが残る
+    await page.check('#diffOnly');
+    const excerpt = await page.textContent('#outHl');
+    const full = await page.inputValue('#out');
+    assert.ok(excerpt.includes('…'), '省略記号が出ていない');
+    assert.ok(excerpt.length < full.length, '抜き出しても短くなっていない');
+
+    // ビット色分けは全スロットを塗る
+    await page.uncheck('#diffOnly');
+    await page.selectOption('#diffMode', 'bits');
+    const painted = await page.$$eval('#outHl span.bit0, #outHl span.bit1', (e) => e.length);
+    assert.strictEqual(painted, 220, 'スロット数と塗られた語の数が一致しない');
+  });
+
+  await t.test('抽出結果にペイロードの搬送位置が図示される', async () => {
+    await open(`?text64=${b64url(TEXT)}&payload=ID:0042&run=embed&output=text`);
+    const marked = await result();
+
+    await page.goto(`${base}?tab=extract`);
+    await page.waitForFunction(() => window.__ready === true);
+    await page.fill('#exsrc', marked);
+    await page.click('#doExtract');
+    await page.waitForFunction(() => !document.getElementById('exBytesBox').hidden);
+
+    // フレーム上の役割ごとに色分けされた本文
+    assert.strictEqual(await page.getAttribute('#exMapBox', 'hidden'), null);
+    const data = await page.$$eval('#exMap span.f-data', (e) => e.length);
+    const sync = await page.$$eval('#exMap span.f-sync', (e) => e.length);
+    assert.ok(data > 0 && sync > 0, 'DATA / SYNC の色分けが出ていない');
+
+    // ペイロード 7 バイトぶんの行 (+ 見出し行)
+    const rows = await page.$$eval('#exBytes tr', (e) => e.length);
+    assert.strictEqual(rows, 8);
+    const table = await page.textContent('#exBytes');
+    assert.match(table, /ID:0042/);
+    assert.match(table, /DATA\[/);
+
+    // ブロックの検出状況
+    assert.strictEqual(await page.getAttribute('#exFrameBox', 'hidden'), null);
+    assert.strictEqual(await page.$$eval('#exBlocks i.hit', (e) => e.length), 3);
+  });
+
   await t.test('不正な値はエラーとして表示され、既定値で動作を続ける', async () => {
     await page.goto(`${base}?data=7&output=bogus`);
     await page.waitForFunction(() => window.__ready === true);

@@ -308,6 +308,20 @@ function blockBitsFor(dataBytes) {
   return HEADER_BITS + dataBytes * 8 + CRC_BITS;
 }
 
+/**
+ * ブロック先頭からのビット位置がどのフィールドに属するかを返す。
+ * DATA の場合は何バイト目の何ビット目かも返す。
+ * @returns {{name:'sync'|'idx'|'total'|'data'|'crc', byte?:number, bit?:number}}
+ */
+function fieldAt(offset, dataBytes) {
+  if (offset < SYNC_BITS) return { name: 'sync' };
+  if (offset < SYNC_BITS + IDX_BITS) return { name: 'idx' };
+  if (offset < HEADER_BITS) return { name: 'total' };
+  const d = offset - HEADER_BITS;
+  if (d < dataBytes * 8) return { name: 'data', byte: d >> 3, bit: d & 7 };
+  return { name: 'crc' };
+}
+
 function writeBits(arr, offset, value, nbits) {
   for (let k = nbits - 1; k >= 0; k--) arr[offset++] = (value >>> k) & 1;
   return offset;
@@ -400,10 +414,14 @@ async function buildFrameBits(payload, key, dataBytesOpt) {
   return { bits, nBlocks, dataBytes, blockBits: bb, streamLen: stream.length };
 }
 
-/** 抽出ビット列から特定 DATA サイズを仮定してブロックを収集する。 */
+/**
+ * 抽出ビット列から特定 DATA サイズを仮定してブロックを収集する。
+ * 各候補には検出されたビット位置 (positions) を記録する。復号後に、
+ * どのビット — ひいては本文中のどの語 — が何を搬送していたかを辿るために使う。
+ */
 function collectBlocks(bits, dataBytes) {
   const bb = blockBitsFor(dataBytes);
-  const found = new Map(); // idx -> Map(hex -> {count, data, total})
+  const found = new Map(); // idx -> Map(hex -> {count, data, total, positions})
   const totals = new Map();
   for (let p = 0; p + bb <= bits.length; p++) {
     if (readBits(bits, p, SYNC_BITS) !== SYNC) continue;
@@ -422,8 +440,10 @@ function collectBlocks(bits, dataBytes) {
     if (!found.has(idx)) found.set(idx, new Map());
     const bucket = found.get(idx);
     const hex = tot + ':' + Array.from(data).join(',');
-    if (!bucket.has(hex)) bucket.set(hex, { count: 0, data, total: tot });
-    bucket.get(hex).count += 1;
+    if (!bucket.has(hex)) bucket.set(hex, { count: 0, data, total: tot, positions: [] });
+    const v = bucket.get(hex);
+    v.count += 1;
+    v.positions.push(p);
   }
   return { found, totals, blockBits: bb };
 }
@@ -448,6 +468,7 @@ async function decodeBits(bits, key, dataBytesOpt) {
     const nBlocks = bestTotal + 1;
     const present = [];
     const parts = [];
+    const placements = [];
     let complete = true;
     for (let i = 0; i < nBlocks; i++) {
       const bucket = found.get(i);
@@ -461,11 +482,15 @@ async function decodeBits(bits, key, dataBytesOpt) {
       if (pick) {
         present.push(i);
         parts.push(pick.data);
+        pick.positions.forEach((p, k) => {
+          placements.push({ idx: i, bitStart: p, primary: k === 0, occurrences: pick.positions.length });
+        });
       } else {
         complete = false;
         parts.push(new Uint8Array(dataBytes));
       }
     }
+    placements.sort((a, b) => a.bitStart - b.bitStart);
 
     const result = {
       ok: false,
@@ -474,7 +499,9 @@ async function decodeBits(bits, key, dataBytesOpt) {
       blocksTotal: nBlocks,
       blocksFound: present.length,
       presentIndices: present,
+      placements,
       payload: null,
+      payloadOffset: null,
       reason: complete ? null : '一部ブロックが未検出',
     };
 
@@ -491,6 +518,9 @@ async function decodeBits(bits, key, dataBytesOpt) {
         if (crc16(head) === got) {
           result.ok = true;
           result.payload = merged.slice(lv.next, end);
+          // 結合後のバイト列におけるペイロード先頭位置。placements と併せると、
+          // ペイロードの各バイトがどのブロックのどのビットに載っていたかを特定できる。
+          result.payloadOffset = lv.next;
           result.reason = null;
         } else {
           result.reason = 'CRC16 不一致 (鍵の相違またはデータ破損)';
@@ -513,7 +543,9 @@ async function decodeBits(bits, key, dataBytesOpt) {
       blocksTotal: 0,
       blocksFound: 0,
       presentIndices: [],
+      placements: [],
       payload: null,
+      payloadOffset: null,
       reason: '同期パターンを検出できませんでした',
     }
   );
@@ -685,8 +717,14 @@ const API = {
   utf8Encode,
   utf8Decode,
   blockBitsFor,
+  fieldAt,
   MAX_BLOCKS,
   DATA_BYTES_CANDIDATES,
+  SYNC_BITS,
+  IDX_BITS,
+  TOTAL_BITS,
+  CRC_BITS,
+  HEADER_BITS,
 };
 
 if (typeof module !== 'undefined' && module.exports) {

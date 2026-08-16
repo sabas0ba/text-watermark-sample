@@ -117,23 +117,9 @@ async function doEmbed() {
   let r;
   try { r = await wm.embed(text, pl, o); }
   catch (e) { msg($('embedMsg'), esc(e.message), 'ng'); return; }
-  lastEmbed = r;
+  lastEmbed = { result: r, outSlots: wm.analyze(r.text, o).slots };
   $('out').value = r.text;
-
-  // 変更された語を強調
-  const outSlots = wm.analyze(r.text, o).slots;
-  const parts = [];
-  let cur = 0;
-  const n = Math.min(outSlots.length, r.slots.length);
-  for (let i = 0; i < n; i++) {
-    const s = outSlots[i];
-    parts.push(esc(r.text.slice(cur, s.start)));
-    const changed = r.slots[i].surface !== s.surface;
-    parts.push(changed ? `<mark title="${esc(r.slots[i].surface)} → ${esc(s.surface)}">${esc(s.surface)}</mark>` : esc(s.surface));
-    cur = s.end;
-  }
-  parts.push(esc(r.text.slice(cur)));
-  $('outHl').innerHTML = parts.join('');
+  renderDiff();
 
   const verify = await wm.extract(r.text, o);
   const okSelf = verify.ok && toHex(verify.payload) === toHex(pl);
@@ -144,25 +130,105 @@ async function doEmbed() {
   updateCapacity();
 }
 
+/* ------------------------------------------------------------------ */
+/* 埋め込み前後の差分表示                                              */
+/*                                                                     */
+/* スロットは原文と出力で 1 対 1 に対応する (対応が崩れる場合は        */
+/* embed() が stable: false を返す)。この対応を使って語単位で並べる。  */
+/* ------------------------------------------------------------------ */
+
+const DIFF_LEGENDS = {
+  inline: '<em class="del">変更前</em><em class="ins">変更後</em>',
+  mark: '<em class="ins">変更された語</em>',
+  bits: '<em class="b0">bit 0 (variants[0])</em><em class="b1">bit 1 (variants[1])</em>',
+  plain: '',
+};
+
+/** 変更箇所の前後を切り出すときに残す文脈の文字数。 */
+const DIFF_CONTEXT = 12;
+
+/** 1 スロットぶんの表示を組み立てる。 */
+function slotHtml(mode, before, after, slot, i) {
+  const title = `slot ${i} / bit ${slot.vi} / ${esc(slot.gid)}`;
+  if (mode === 'plain') return esc(after);
+  if (mode === 'bits') return `<span class="bit${slot.vi}" title="${title}">${esc(after)}</span>`;
+  if (before === after) return `<span class="wm-same" title="${title}">${esc(after)}</span>`;
+  if (mode === 'inline') {
+    return `<del class="wm" title="${title}">${esc(before)}</del><ins class="wm" title="${title}">${esc(after)}</ins>`;
+  }
+  return `<mark title="${esc(before)} → ${esc(after)} / ${title}">${esc(after)}</mark>`;
+}
+
+function renderDiff() {
+  if (!lastEmbed) { $('outHl').innerHTML = ''; $('diffStat').innerHTML = ''; $('diffLegend').innerHTML = ''; return; }
+  const { result: r, outSlots } = lastEmbed;
+  const mode = $('diffMode').value;
+  const n = Math.min(outSlots.length, r.slots.length);
+
+  const changedIdx = [];
+  for (let i = 0; i < n; i++) if (r.slots[i].surface !== outSlots[i].surface) changedIdx.push(i);
+  const excerpt = $('diffOnly').checked && mode !== 'plain' && changedIdx.length > 0;
+
+  // 表示する文字範囲。抜き出しモードでは変更箇所の前後だけを残し、
+  // 重なる範囲は先に併合しておく (併合しないと文脈が二重に出る)。
+  let ranges;
+  if (excerpt) {
+    ranges = [];
+    for (const i of changedIdx) {
+      const from = Math.max(0, outSlots[i].start - DIFF_CONTEXT);
+      const to = Math.min(r.text.length, outSlots[i].end + DIFF_CONTEXT);
+      const last = ranges[ranges.length - 1];
+      if (last && from <= last[1]) last[1] = Math.max(last[1], to);
+      else ranges.push([from, to]);
+    }
+  } else {
+    ranges = [[0, r.text.length]];
+  }
+
+  const parts = [];
+  ranges.forEach(([from, to], ri) => {
+    if (from > 0 && (ri > 0 || excerpt)) parts.push('<span class="gap"> … </span>');
+    let cur = from;
+    for (let i = 0; i < n; i++) {
+      const s = outSlots[i];
+      if (s.start < from || s.end > to) continue; // 範囲をまたぐ語は素のまま出す
+      parts.push(esc(r.text.slice(cur, s.start)));
+      parts.push(slotHtml(mode, r.slots[i].surface, s.surface, s, i));
+      cur = s.end;
+    }
+    parts.push(esc(r.text.slice(cur, to)));
+  });
+  if (excerpt && ranges[ranges.length - 1][1] < r.text.length) parts.push('<span class="gap"> … </span>');
+
+  const changed = changedIdx.length;
+  $('outHl').innerHTML = parts.join('');
+  $('diffLegend').innerHTML = DIFF_LEGENDS[mode] || '';
+  statCards($('diffStat'), [
+    ['スロット', n],
+    ['変更された語', `${changed} (${n ? ((changed / n) * 100).toFixed(0) : 0}%)`],
+    ['文字数', `${$('src').value.length} → ${r.text.length}`],
+  ]);
+}
+
 /* ---- 抽出 ---- */
+
+const FIELD_LABEL = { sync: 'SYNC', idx: 'IDX', total: 'TOTAL', data: 'DATA', crc: 'CRC8' };
+let lastExtract = null;
+
 async function doExtract() {
   const text = $('exsrc').value;
   const o = opts();
   if (!text) { msg($('exMsg'), '検査対象が空です', 'ng'); return; }
   const r = await wm.extract(text, o);
+  lastExtract = { result: r, text, key: o.key || '' };
+
   statCards($('exStat'), [
     ['スロット', r.slotCount],
     ['DATA', (r.dataBytes || '-') + ' B'],
     ['検出ブロック', `${r.blocksFound} / ${r.blocksTotal}`],
     ['判定', r.ok ? '検出' : '未検出'],
   ]);
-  let grid = '';
-  if (r.blocksTotal) {
-    const hit = new Set(r.presentIndices);
-    grid = '<div class="blocks">' + Array.from({ length: r.blocksTotal }, (_, i) =>
-      `<i class="${hit.has(i) ? 'hit' : ''}" title="block ${i}">${i}</i>`).join('') + '</div>';
-  }
-  $('exBlocks').innerHTML = grid;
+
   if (r.ok) {
     let asText = '';
     try { asText = wm.utf8Decode(r.payload); } catch (e) { asText = '(UTF-8 として解釈できません)'; }
@@ -172,6 +238,139 @@ async function doExtract() {
     $('exPayload').innerHTML = '';
     msg($('exMsg'), '透かしを検出できませんでした — ' + esc(r.reason || ''), 'ng');
   }
+
+  renderFrame(r);
+  renderMap();
+  renderPayloadBytes();
+}
+
+/** ブロックの検出状況 (グリッドと内訳表)。 */
+function renderFrame(r) {
+  $('exFrameBox').hidden = !r.blocksTotal;
+  if (!r.blocksTotal) return;
+
+  const hit = new Set(r.presentIndices);
+  $('exBlocks').innerHTML =
+    '<div class="blocks">' +
+    Array.from({ length: r.blocksTotal }, (_, i) =>
+      `<i class="${hit.has(i) ? 'hit' : ''}" title="block ${i} — ${hit.has(i) ? '検出' : '未検出'}">${i}</i>`).join('') +
+    '</div>';
+
+  // ブロックごとに、最初に見つかった位置と検出回数を出す
+  const first = new Map();
+  for (const p of r.placements || []) if (!first.has(p.idx)) first.set(p.idx, p);
+  const rows = Array.from({ length: r.blocksTotal }, (_, i) => {
+    const p = first.get(i);
+    const slots = p ? `${p.bitStart} – ${p.bitStart + r.blockBits - 1}` : '—';
+    return `<tr class="${p ? '' : 'miss'}"><td>${i}</td><td>${p ? '検出' : '未検出'}</td>` +
+           `<td>${slots}</td><td>${p ? p.occurrences : 0}</td></tr>`;
+  }).join('');
+  $('exBlockTable').innerHTML =
+    '<table><tr><th>ブロック</th><th>状態</th><th>スロット範囲 (最初の周期)</th><th>検出回数</th></tr>' +
+    rows + '</table>' +
+    `<small class="note">1 ブロック = ${r.blockBits} bit (SYNC ${wm.SYNC_BITS} + IDX ${wm.IDX_BITS} + ` +
+    `TOTAL ${wm.TOTAL_BITS} + DATA ${r.dataBytes * 8} + CRC8 ${wm.CRC_BITS})。` +
+    '同じブロックが複数回見つかるのは、周期的に繰り返し埋め込まれているため。</small>';
+}
+
+/** 本文を語単位に描き、各語がフレーム上のどのフィールドを搬送していたかを色で示す。 */
+function renderMap() {
+  if (!lastExtract) return;
+  const { result: r, text } = lastExtract;
+  const show = r.placements && r.placements.length;
+  $('exMapBox').hidden = !show;
+  if (!show) return;
+
+  const scope = $('exMapScope').value;
+  const placements = scope === 'primary' ? r.placements.filter((p) => p.primary) : r.placements;
+
+  // スロット番号 → {ブロック, フィールド} の割り当て。先に書いたものを優先する。
+  const ann = new Map();
+  for (const p of placements) {
+    for (let k = 0; k < r.blockBits; k++) {
+      const s = p.bitStart + k;
+      if (s >= r.slots.length || ann.has(s)) continue;
+      ann.set(s, { idx: p.idx, field: wm.fieldAt(k, r.dataBytes), offset: k });
+    }
+  }
+
+  const parts = [];
+  let cur = 0;
+  r.slots.forEach((s, i) => {
+    parts.push(esc(text.slice(cur, s.start)));
+    const a = ann.get(i);
+    if (a) {
+      const f = a.field;
+      const where = f.name === 'data' ? ` DATA[${f.byte}] bit ${f.bit}` : ' ' + FIELD_LABEL[f.name];
+      parts.push(
+        `<span class="f-${f.name}" title="block ${a.idx} /${where} / slot ${i} / bit ${s.vi}">${esc(s.surface)}</span>`
+      );
+    } else {
+      parts.push(`<span class="f-none dim" title="slot ${i} / bit ${s.vi} (フレーム外)">${esc(s.surface)}</span>`);
+    }
+    cur = s.end;
+  });
+  parts.push(esc(text.slice(cur)));
+  $('exMap').innerHTML = parts.join('');
+
+  $('exLegend').innerHTML =
+    '<em class="sync">SYNC</em><em class="idx">IDX</em><em class="total">TOTAL</em>' +
+    '<em class="data">DATA</em><em class="crc">CRC8</em>';
+}
+
+/**
+ * ペイロードの各バイトが本文のどの語に載っていたかを表にする。
+ * 搬送ビットは鍵ストリームで XOR されているため、生ビットと復調値の両方を出す。
+ */
+function renderPayloadBytes() {
+  const show = lastExtract && lastExtract.result.ok && lastExtract.result.payloadOffset !== null;
+  $('exBytesBox').hidden = !show;
+  if (!show) return;
+
+  const { result: r, text, key } = lastExtract;
+  const D = r.dataBytes;
+  const first = new Map();
+  for (const p of r.placements) if (!first.has(p.idx)) first.set(p.idx, p);
+
+  const rows = [];
+  for (let j = 0; j < r.payload.length; j++) {
+    const off = r.payloadOffset + j; // 結合後バイト列でのオフセット
+    const block = Math.floor(off / D);
+    const byteInBlock = off % D;
+    const p = first.get(block);
+    if (!p) continue;
+    const bitStart = p.bitStart + wm.HEADER_BITS + byteInBlock * 8;
+    const slots = r.slots.slice(bitStart, bitStart + 8);
+    if (slots.length < 8) continue;
+
+    const raw = slots.reduce((acc, s) => (acc << 1) | s.vi, 0);
+    const words = slots.map((s) => `<span class="bit${s.vi}">${esc(s.surface)}</span>`).join(' ');
+    const from = slots[0].start;
+    const to = slots[7].end;
+    const excerpt = text.slice(from, to);
+    const value = r.payload[j];
+    const ch = value >= 0x20 && value < 0x7f ? String.fromCharCode(value) : '';
+    rows.push(
+      `<tr><td>${j}</td><td>${value.toString(16).padStart(2, '0')}${ch ? ' ' + esc(ch) : ''}</td>` +
+      `<td>${raw.toString(2).padStart(8, '0')}</td>` +
+      `<td>block ${block} / DATA[${byteInBlock}]</td>` +
+      `<td>${from} – ${to}</td>` +
+      `<td class="mono-wrap">${words}</td></tr>`
+    );
+  }
+
+  let asText = '';
+  try { asText = wm.utf8Decode(r.payload); } catch (e) { asText = '(UTF-8 として解釈できません)'; }
+  $('exBytes').innerHTML =
+    `<p style="font-size:12.5px">復調したペイロード: <b>${esc(asText)}</b> ` +
+    `(${r.payload.length} B / HEX ${toHex(r.payload)})` +
+    (key ? ' — 鍵ストリームで復号済み' : '') + '</p>' +
+    '<table><tr><th>#</th><th>復調値</th><th>生ビット</th><th>フレーム上の位置</th>' +
+    '<th>本文の文字位置</th><th>搬送している語 (8 スロット)</th></tr>' +
+    rows.join('') + '</table>' +
+    (rows.length < r.payload.length
+      ? `<small class="note">${r.payload.length - rows.length} バイトは搬送位置を特定できなかった。</small>`
+      : '');
 }
 
 /* ---- 検証 ---- */
@@ -582,6 +781,9 @@ $('src').addEventListener('input', deb);
 $('payload').addEventListener('input', deb);
 document.querySelectorAll('.tier,.lang,#dbytes,#profile,input[name=pmode]').forEach((e) => e.addEventListener('change', updateCapacity));
 
+$('diffMode').onchange = renderDiff;
+$('diffOnly').onchange = renderDiff;
+$('exMapScope').onchange = renderMap;
 $('uBuild').onclick = buildUrl;
 $('uCopy').onclick = () => { const u = buildUrl(); if (navigator.clipboard) navigator.clipboard.writeText(u); };
 $('uOpen').onclick = () => window.open(buildUrl(), '_blank', 'noopener');
