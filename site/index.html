@@ -1,0 +1,204 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>語選択テキスト透かし — 試作</title>
+<link rel="stylesheet" href="./assets/style.css">
+</head>
+<body>
+<header>
+  <h1>語選択テキスト透かし — 試作</h1>
+  <p>意味を変えない表記ゆれ・短縮形・同義語の選択に任意長のバイト列を符号化する。自己同期フレームにより部分切り出しに耐える。外部通信は行わない。</p>
+</header>
+
+<main>
+<div id="paramMsg"></div>
+
+<fieldset>
+  <legend>共通設定</legend>
+  <div class="row">
+    <div><label>辞書ティア</label>
+      <label><input type="checkbox" class="tier" value="A" checked> A 表記ゆれ</label>
+      <label><input type="checkbox" class="tier" value="B" checked> B 文脈依存</label>
+      <label><input type="checkbox" class="tier" value="C"> C 語彙置換</label>
+    </div>
+    <div><label>言語</label>
+      <label><input type="checkbox" class="lang" value="ja" checked> 日本語</label>
+      <label><input type="checkbox" class="lang" value="en" checked> 英語</label>
+    </div>
+    <div><label for="key">鍵</label><input type="text" id="key" placeholder="(空欄可)" size="16"></div>
+    <div><label for="dbytes">DATA</label>
+      <select id="dbytes">
+        <option value="auto">自動</option>
+        <option value="2">2 B</option><option value="4">4 B</option><option value="8">8 B</option>
+        <option value="16">16 B</option><option value="32">32 B</option>
+      </select>
+    </div>
+    <div><label for="profile">自動選択の基準</label>
+      <select id="profile">
+        <option value="span">切り出し耐性 (span 最小)</option>
+        <option value="compact">周期長最小</option>
+      </select>
+    </div>
+  </div>
+  <small class="note">鍵は SHA-256 ストリームによるホワイトニングに用いる。鍵が異なると CRC16 検査で復号は失敗する。</small>
+</fieldset>
+
+<nav>
+  <button class="tab on" data-t="embed">埋め込み</button>
+  <button class="tab" data-t="extract">抽出</button>
+  <button class="tab" data-t="verify">検証</button>
+  <button class="tab" data-t="dict">辞書</button>
+  <button class="tab" data-t="url">URL</button>
+</nav>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="embed">
+  <fieldset>
+    <legend>原文</legend>
+    <textarea id="src" rows="9" placeholder="透かしを埋め込む本文を貼り付けてください"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="sec" id="sampleJa">日本語サンプル</button>
+      <button class="sec" id="sampleEn">英語サンプル</button>
+      <button class="sec" id="clearSrc">消去</button>
+    </div>
+  </fieldset>
+
+  <fieldset>
+    <legend>ペイロード</legend>
+    <div class="row">
+      <div><label><input type="radio" name="pmode" value="text" checked> テキスト (UTF-8)</label>
+           <label><input type="radio" name="pmode" value="hex"> HEX</label></div>
+      <div style="flex:1 1 320px"><input type="text" id="payload" value="ID:0042" style="width:100%"></div>
+    </div>
+  </fieldset>
+
+  <div class="stat" id="cap"></div>
+  <div id="capMsg"></div>
+
+  <div class="row"><button id="doEmbed">埋め込む</button>
+    <button class="sec" id="copyOut">出力をコピー</button></div>
+
+  <fieldset>
+    <legend>出力 (変更された語を強調表示)</legend>
+    <pre class="out" id="outHl"></pre>
+    <textarea id="out" rows="6" spellcheck="false"></textarea>
+  </fieldset>
+  <div id="embedMsg"></div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="extract" hidden>
+  <fieldset>
+    <legend>検査対象</legend>
+    <textarea id="exsrc" rows="12" placeholder="透かしを検査する本文を貼り付けてください"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button id="doExtract">抽出する</button>
+      <button class="sec" id="fromEmbed">埋め込み結果を読み込む</button>
+    </div>
+  </fieldset>
+  <div id="exMsg"></div>
+  <div class="stat" id="exStat"></div>
+  <div id="exBlocks"></div>
+  <fieldset><legend>復元したペイロード</legend>
+    <div class="stat" id="exPayload"></div>
+  </fieldset>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="verify" hidden>
+  <p style="color:var(--muted);font-size:12.5px">埋め込みタブの原文と現在の設定を用いて自己検証を行う。試行回数が多いため数秒かかる。</p>
+  <div class="row">
+    <button id="runVerify">検証を実行</button>
+    <div><label>切り出し試行数 <input type="text" id="vTrials" value="12" size="3"></label></div>
+  </div>
+  <div id="vOut"></div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="dict" hidden>
+  <div class="row">
+    <button id="applyDict">辞書を適用</button>
+    <button class="sec" id="resetDict">既定に戻す</button>
+    <button class="sec" id="countDict">原文中の出現数を集計</button>
+  </div>
+  <div id="dictMsg"></div>
+  <fieldset><legend>辞書 (JSON)</legend>
+    <textarea id="dictJson" rows="18" spellcheck="false"></textarea>
+  </fieldset>
+  <div id="dictCount"></div>
+</section>
+
+<!-- ------------------------------------------------------------------ -->
+<section id="url" hidden>
+  <p style="color:var(--muted);font-size:12.5px">
+    クエリ文字列 (GET) で本文・埋め込みデータ・各種設定を指定できる。<code>run</code> を付けると読み込み時に自動実行し、
+    <code>output=text</code> / <code>output=json</code> を付けると UI を省いて結果のみを描画する。
+  </p>
+
+  <fieldset>
+    <legend>現在の入力から URL を生成</legend>
+    <div class="row">
+      <div><label for="uAction">動作</label>
+        <select id="uAction">
+          <option value="">指定しない</option>
+          <option value="embed">embed (埋め込み)</option>
+          <option value="extract">extract (抽出)</option>
+        </select>
+      </div>
+      <div><label for="uOutput">出力形式</label>
+        <select id="uOutput">
+          <option value="">通常の画面</option>
+          <option value="text">text (結果のみ)</option>
+          <option value="json">json</option>
+        </select>
+      </div>
+      <div><label><input type="checkbox" id="uB64"> 本文とペイロードを base64url で載せる</label></div>
+      <div><label><input type="checkbox" id="uKey"> 鍵も URL に含める</label></div>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <button id="uBuild">URL を生成</button>
+      <button class="sec" id="uCopy">URL をコピー</button>
+      <button class="sec" id="uOpen">新しいタブで開く</button>
+    </div>
+    <textarea id="uOut" rows="4" spellcheck="false" style="margin-top:8px" placeholder="生成した URL がここに表示されます"></textarea>
+    <div id="uMsg"></div>
+    <small class="note">鍵を URL に含めると閲覧履歴やリファラに残る。既定では含めない。</small>
+    <small class="note">日本語の本文は base64url のほうが URL が短くなる (1 文字あたり約 4 文字。パーセント符号化では 9 文字)。</small>
+  </fieldset>
+
+  <fieldset>
+    <legend>パラメータ一覧</legend>
+    <table>
+      <tr><th>名前</th><th>値</th><th>説明</th></tr>
+      <tr><td>text</td><td>文字列</td><td>本文 (embed の原文 / extract の検査対象)</td></tr>
+      <tr><td>text64</td><td>base64url</td><td>本文 (UTF-8 を base64url 化)。text より優先</td></tr>
+      <tr><td>payload</td><td>文字列</td><td>埋め込みデータ</td></tr>
+      <tr><td>payload64</td><td>base64url</td><td>埋め込みデータ。payload より優先</td></tr>
+      <tr><td>pmode</td><td>text | hex</td><td>埋め込みデータの解釈 (既定 text)</td></tr>
+      <tr><td>key</td><td>文字列</td><td>鍵</td></tr>
+      <tr><td>data</td><td>auto | 2 | 4 | 8 | 16 | 32</td><td>DATA バイト数</td></tr>
+      <tr><td>profile</td><td>span | compact</td><td>DATA 自動選択の基準</td></tr>
+      <tr><td>tiers</td><td>例 A,B / AB</td><td>有効な辞書ティア</td></tr>
+      <tr><td>langs</td><td>例 ja,en</td><td>有効な言語</td></tr>
+      <tr><td>dict</td><td>URL</td><td>辞書 JSON の取得先 (同一オリジンまたは CORS 許可が必要)</td></tr>
+      <tr><td>tab</td><td>embed | extract | verify | dict | url</td><td>初期表示タブ</td></tr>
+      <tr><td>run</td><td>embed | extract | 1</td><td>読み込み時に自動実行 (1 は tab に従う)</td></tr>
+      <tr><td>output</td><td>text | json</td><td>UI を省き結果のみを描画</td></tr>
+    </table>
+    <small class="note">短縮名も使える: t=text, t64=text64, p=payload, p64=payload64, k=key, d=data。</small>
+  </fieldset>
+
+  <fieldset>
+    <legend>例</legend>
+    <pre class="out" id="uExamples"></pre>
+  </fieldset>
+</section>
+</main>
+
+<script src="./assets/dict.js"></script>
+<script src="./assets/core.js"></script>
+<script src="./assets/app.js"></script>
+</body>
+</html>

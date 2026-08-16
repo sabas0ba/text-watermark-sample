@@ -1,0 +1,14 @@
+{
+  "name": "text-watermark-sample",
+  "version": "0.1.0",
+  "private": true,
+  "description": "語選択によるテキスト透かしの試作 (GitHub Pages で動く静的アプリ)",
+  "license": "Apache-2.0",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "serve": "node tools/serve.js"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1"
+  }
+}
